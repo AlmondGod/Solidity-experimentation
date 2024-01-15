@@ -1,100 +1,77 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
-contract DecentralizedVoting {
+contract DecentralizedVoting is Ownable {
     uint public numVoters;
-    address public owner;
     uint public endTime;
-    uint private endofArray = 0;
     bool public voteEnded = false;
     address public winner;
 
-    address[] public candidates = new address[](1);
-    uint candidatesIndex = 0;
-    
+    // Using dynamic array instead of fixed-size array
+    address[] public candidates;
+
+    // Keeping track of the current winner and highest votes
     address public currentWinner;
     uint public currentHighestVotes = 0;
-    address[] public currentWinners = new address[](1);
-    uint currentWinnersIndex = 0;
 
     mapping(address => uint) public voters;
-    mapping(address => uint) public voteCounts; //these represent the vote counts plus one
+    mapping(address => uint) public voteCounts; // Representing the vote counts
 
-    event Vote(address _voter, address _vote);
-    event Registration(address _voter);
-    event CandidateAdded(address _candidateName);
-    event CandidateWon(address _candidateName, uint votes);
-    event MultipleCandidatesWon(address[] _candidateNames, uint votes);
+    event Vote(address indexed voter, address indexed vote);
+    event Registration(address indexed voter);
+    event CandidateAdded(address indexed candidateName);
+    event CandidateWon(address indexed candidateName, uint votes);
+    event MultipleCandidatesWon(address[] candidateNames, uint votes);
 
-
-    constructor(uint _endTime) {
-        require(_endTime >= block.timestamp, "end time must be in future"); 
+    constructor(uint _endTime) Ownable() {
+        require(_endTime >= block.timestamp, "End time must be in future");
         endTime = _endTime;
-        owner = msg.sender;
     }
 
-    //register a voter as long as they are not registered
     function registerVoter() public {
-        require(voters[msg.sender] == 0, "you cannot reregister yourself");
+        require(voters[msg.sender] == 0, "Cannot re-register");
         emit Registration(msg.sender);
         voters[msg.sender] = 1;
+        numVoters++;
     }
 
-    //all registered voters who have not yet voted can cast votes
     function castVote(address _candidate) public {
-        require(voters[msg.sender] != 2, "you already voted!");
-        require(voteCounts[_candidate] > 0, "your vote is not a candidate!");
+        require(voters[msg.sender] == 1, "Not registered or already voted");
+        require(voteCounts[_candidate] > 0, "Not a valid candidate");
         emit Vote(msg.sender, _candidate);
-        voters[msg.sender] = 2;
+        voters[msg.sender] = 2; // Mark as voted
         voteCounts[_candidate]++;
+
+        // Update current winner and highest votes
+        if (voteCounts[_candidate] > currentHighestVotes) {
+            currentWinner = _candidate;
+            currentHighestVotes = voteCounts[_candidate];
+            winner = currentWinner; // Set the winner if single highest
+        } else if (voteCounts[_candidate] == currentHighestVotes) {
+            winner = address(0); // Clear winner in case of a tie
+        }
     }
 
-    //the owner can add voting candidates
-    function addCandidates(address _candidate) public {
-        require(msg.sender == owner, "only owner can add candidates");
-        require(voteCounts[_candidate] == 0, "candidate is already added");
-        voteCounts[_candidate] == 1;  
-        candidates[candidatesIndex] == _candidate;
-        candidatesIndex++;  
-    }   
-    
-    //end the voting time period and emit event showing winner(s)
-    function endVote() public {
-        require(msg.sender == owner, "only owner can end vote");
-        require(block.timestamp > endTime, "can only end after endTime");
-        require(!voteEnded, "vote already ended");
-        
-        for(uint i = 0; i < candidates.length; i++) {
-            address currentCandidate = candidates[i];
-            if (voteCounts[currentCandidate] > currentHighestVotes) {
-                currentWinner = currentCandidate;
-                currentHighestVotes = voteCounts[currentCandidate];
-                currentWinners = new address[](1);
-                currentWinners[0] = currentWinner;
-                currentWinnersIndex = 1;
-            }
+    function addCandidates(address _candidate) public onlyOwner {
+        require(voteCounts[_candidate] == 0, "Candidate already added");
+        voteCounts[_candidate] = 1; // Initialize vote count
+        candidates.push(_candidate);
+        emit CandidateAdded(_candidate);
+    }
 
-            //multiple winners handling
-            if (voteCounts[currentCandidate] == currentHighestVotes) {
-                currentWinners[currentWinnersIndex] = currentCandidate;
-                currentWinnersIndex++;
-            }
-        }
-
-        //emit winner(s)
-        if (currentWinners.length < 2) {
-            winner = currentWinner;
-            emit CandidateWon(winner, currentHighestVotes);
-        } else {
-            emit MultipleCandidatesWon(currentWinners, currentHighestVotes);
-        }
-
+    function endVote() public onlyOwner {
+        require(block.timestamp > endTime, "Voting period not yet ended");
+        require(!voteEnded, "Vote already ended");
         voteEnded = true;
+        // Winner is already set in castVote, no need to iterate
+        if (winner == address(0)) {
+            emit MultipleCandidatesWon(candidates, currentHighestVotes);
+        } else {
+            emit CandidateWon(winner, currentHighestVotes);
+        }
     }
-
 }
