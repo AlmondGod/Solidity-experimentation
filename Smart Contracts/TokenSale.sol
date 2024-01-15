@@ -5,30 +5,37 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
+// The TokenSale contract handles the presale and public sale of ERC20 tokens.
 contract TokenSale is ReentrancyGuard, Ownable {
-    IERC20 public token;
+    IERC20 public token;  // ERC20 token being sold
 
+    // Sale phase timeframes
     uint256 public presaleStartTime;
     uint256 public presaleEndTime;
     uint256 public publicSaleStartTime;
     uint256 public publicSaleEndTime;
 
+    // Caps on Ether raised during each phase
     uint256 public presaleCap;
     uint256 public publicSaleCap;
 
+    // Contribution limits and total Ether raised in sale
     uint256 public minimumContribution;
     uint256 public maximumContribution;
+    uint256 public totalRaised; 
 
-    uint256 public totalRaised;
-
+    // Tracking contributions per address
     mapping(address => uint256) public contributions;
 
+    // Enum for managing the sale's current phase
     enum SalePhase { NotStarted, Presale, PublicSale, Ended }
     SalePhase public currentPhase = SalePhase.NotStarted;
 
+    // Events for logging significant contract actions
     event TokensPurchased(address indexed purchaser, uint256 etherAmount, uint256 tokenAmount);
     event RefundClaimed(address indexed claimant, uint256 amount);
 
+    // Contract constructor
     constructor(
         address _tokenAddress,
         uint256 _presaleStartTime,
@@ -41,69 +48,73 @@ contract TokenSale is ReentrancyGuard, Ownable {
         uint256 _maximumContribution
     ) {
         require(_tokenAddress != address(0), "Token address cannot be zero");
-        require(_presaleEndTime > _presaleStartTime, "Invalid presale time range");
-        require(_publicSaleEndTime > _publicSaleStartTime, "Invalid public sale time range");
-
-        token = IERC20(_tokenAddress);
+        // Setting up the sale timeframes and caps
         presaleStartTime = _presaleStartTime;
         presaleEndTime = _presaleEndTime;
         publicSaleStartTime = _publicSaleStartTime;
         publicSaleEndTime = _publicSaleEndTime;
         presaleCap = _presaleCap;
         publicSaleCap = _publicSaleCap;
+
+        // Setting contribution limits and intitialize ERC
         minimumContribution = _minimumContribution;
         maximumContribution = _maximumContribution;
+        token = IERC20(_tokenAddress);
     }
 
-    function buyTokens() public payable nonReentrant {
-        require(currentPhase != SalePhase.NotStarted && currentPhase != SalePhase.Ended, "Sale not active");
-        require(msg.value >= minimumContribution && msg.value <= maximumContribution, "Contribution out of bounds");
+// Allows users to buy tokens; refunds excess contributions if caps are exceeded
+function buyTokens() public payable nonReentrant {
+    require(currentPhase != SalePhase.NotStarted && currentPhase != SalePhase.Ended, "Sale not active");
+    require(msg.value >= minimumContribution && msg.value <= maximumContribution, "Contribution out of bounds");
 
-        uint256 contribution = msg.value;
-        uint256 refund = 0;
+    uint256 contribution = msg.value;
+    uint256 refund = 0;
 
-        if (currentPhase == SalePhase.Presale) {
-            require(block.timestamp >= presaleStartTime && block.timestamp <= presaleEndTime, "Presale not active");
-            if (totalRaised + contribution > presaleCap) {
-                refund = totalRaised + contribution - presaleCap;
-                contribution = presaleCap - totalRaised;
-            }
-        } else if (currentPhase == SalePhase.PublicSale) {
-            require(block.timestamp >= publicSaleStartTime && block.timestamp <= publicSaleEndTime, "Public sale not active");
-            if (totalRaised + contribution > publicSaleCap) {
-                refund = totalRaised + contribution - publicSaleCap;
-                contribution = publicSaleCap - totalRaised;
-            }
+    // Adjusting contributions based on the current phase's cap
+    if (currentPhase == SalePhase.Presale) {
+        require(block.timestamp >= presaleStartTime && block.timestamp <= presaleEndTime, "Presale not active");
+        if (totalRaised + contribution > presaleCap) {
+            refund = totalRaised + contribution - presaleCap;
+            contribution = presaleCap - totalRaised;
         }
-
-        totalRaised += contribution;
-        contributions[msg.sender] += contribution;
-
-        if (refund > 0) {
-            payable(msg.sender).transfer(refund);
+    } else if (currentPhase == SalePhase.PublicSale) {
+        require(block.timestamp >= publicSaleStartTime && block.timestamp <= publicSaleEndTime, "Public sale not active");
+        if (totalRaised + contribution > publicSaleCap) {
+            refund = totalRaised + contribution - publicSaleCap;
+            contribution = publicSaleCap - totalRaised;
         }
-
-        uint256 tokenAmount = calculateTokenAmount(contribution);
-        token.transfer(msg.sender, tokenAmount);
-
-        emit TokensPurchased(msg.sender, contribution, tokenAmount);
     }
 
-    function calculateTokenAmount(uint256 etherAmount) internal pure returns (uint256) {
-        uint256 tokenRate = 1000;
-        return etherAmount * tokenRate;
+    totalRaised += contribution;
+    contributions[msg.sender] += contribution;
+
+    // Refunding excess Ether if any
+    if (refund > 0) {
+        payable(msg.sender).transfer(refund);
     }
 
-    function claimRefund() public nonReentrant {
-        require(currentPhase == SalePhase.Ended, "Sale not ended");
-        require(totalRaised < presaleCap || totalRaised < publicSaleCap, "Caps reached, no refunds");
+    // Calculating and transferring tokens to the buyer
+    uint256 tokenAmount = calculateTokenAmount(contribution);
+    token.transfer(msg.sender, tokenAmount);
 
-        uint256 amountContributed = contributions[msg.sender];
-        require(amountContributed > 0, "No contributions from sender");
+    emit TokensPurchased(msg.sender, contribution, tokenAmount);
+}
 
-        contributions[msg.sender] = 0;
-        payable(msg.sender).transfer(amountContributed);
+// Calculates the amount of tokens to be received for a given Ether amount
+function calculateTokenAmount(uint256 etherAmount) internal pure returns (uint256) {
+    uint256 tokenRate = 1000;  // Example rate: 1 ETH = 1000 Tokens
+    return etherAmount * tokenRate;
+}
 
+// Allows contributors to claim a refund if the sale does not reach its cap
+function claimRefund() public nonReentrant {
+    require(currentPhase == SalePhase.Ended, "Sale not ended");
+    require(totalRaised < presaleCap || totalRaised < publicSaleCap, "Caps reached, no refunds");
+    uint256 amountContributed = contributions[msg.sender];
+    require(amountContributed > 0, "No contributions from sender");
+
+    contributions[msg.sender] = 0;
+    payable(msg.sender).transfer(amountContributed);
         emit RefundClaimed(msg.sender, amountContributed);
     }
 
